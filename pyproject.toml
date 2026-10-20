@@ -1,0 +1,5 @@
+# Only tool settings live here; the repo is run from its root (python -m ingest ...), not installed.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

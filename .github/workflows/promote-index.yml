@@ -1,0 +1,167 @@
+# promote-index -- put an EXISTING index version into the four environments.
+#
+# Use it to roll back (pick an older version) or to re-promote a version after fixing an environment.
+# It runs the same promote chain as ingest.yml, one environment after the other, with the same approvals:
+#
+#   promote-dev -> promote-sit -> promote-pre-prod (approval) -> promote-prod (approval)
+#
+# The version is checked first (promote-dev): it must exist in the knowledge bucket and must have passed its
+# evaluation gate. Find versions with:  python -m ingest latest   or   the "Index build" job summaries.
+#
+# Names needed (same as ingest.yml): repository variable AWS_REGION; repository secret KB_BUCKET; environment secret AWS_ROLE_ARN
+# in each of dev, sit, pre-prod and prod.
+
+name: promote-index
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Index version to promote, e.g. 20261016-103000-ab12cd3 (an older one = a rollback)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }} # a repository variable (no account id in it), set by github_bootstrap.sh
+
+# Every job runs on ubuntu-24.04, the image this pipeline was rehearsed on. `ubuntu-latest` moves to Ubuntu 26 on
+# 19 Oct 2026; pin the runner like you pin actions, and move to a new image on purpose, in a pull request.
+jobs:
+  promote-dev:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: dev
+    concurrency:
+      group: kb-promote-dev
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Log in to AWS (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Mask the account id
+        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+      - name: Promote dev (write the pointer, wait for the app)
+        env:
+          KB_BUCKET: ${{ secrets.KB_BUCKET }}
+          VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python -m ingest promote --env dev --version "$VERSION"
+
+  promote-sit:
+    needs: promote-dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: sit
+    concurrency:
+      group: kb-promote-sit
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Log in to AWS (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Mask the account id
+        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+      - name: Promote sit (write the pointer, wait for the app)
+        env:
+          KB_BUCKET: ${{ secrets.KB_BUCKET }}
+          VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python -m ingest promote --env sit --version "$VERSION"
+
+  promote-pre-prod:
+    needs: promote-sit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: pre-prod        # required reviewer: the run waits here for an approval
+    concurrency:
+      group: kb-promote-pre-prod
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Log in to AWS (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Mask the account id
+        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+      - name: Promote pre-prod (write the pointer, wait for the app)
+        env:
+          KB_BUCKET: ${{ secrets.KB_BUCKET }}
+          VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python -m ingest promote --env pre-prod --version "$VERSION"
+
+  promote-prod:
+    needs: promote-pre-prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: prod            # required reviewer: the run waits here for an approval
+    concurrency:
+      group: kb-promote-prod
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Log in to AWS (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Mask the account id
+        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+      - name: Promote prod (write the pointer, wait for the app)
+        env:
+          KB_BUCKET: ${{ secrets.KB_BUCKET }}
+          VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python -m ingest promote --env prod --version "$VERSION"

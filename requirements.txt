@@ -1,0 +1,8 @@
+# Everything the ingest and eval code needs -- and nothing else.
+# No pandas, no FastAPI, no finrisk-app: this repo runs on its own.
+boto3>=1.36.0          # S3 + SSM + Bedrock (put_object IfNoneMatch needs a recent boto3)
+numpy>=2.0
+scikit-learn>=1.5      # TF-IDF index, hashing vectors for the offline CI build
+joblib>=1.4
+pyyaml>=6.0
+pytest>=8.0

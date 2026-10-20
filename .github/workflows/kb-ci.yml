@@ -1,0 +1,90 @@
+# kb-ci -- the check every pull request to this repo must pass (required check name: kb-check).
+#
+# A pull request that adds or edits a policy document is reviewed by compliance. This job gives the
+# reviewer the numbers: which documents changed, how much of the index would be reused, and whether
+# the assistant still finds the right document for every evaluation question (compared with main).
+#
+# No AWS, no secrets: the index is built with tfidf locally. The incremental plan uses the offline
+# `hash` vectors as a stand-in for Titan (same reuse rules, no Bedrock call).
+
+name: kb-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kb-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job runs on ubuntu-24.04, the image this pipeline was rehearsed on. `ubuntu-latest` moves to Ubuntu 26 on
+# 19 Oct 2026; pin the runner like you pin actions, and move to a new image on purpose, in a pull request.
+jobs:
+  kb-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out this change
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check out main (to compare against)
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          path: _main
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Tests (no network)
+        run: python -m pytest
+
+      - name: Lint the front matter
+        run: python -m ingest lint --docs docs
+
+      - name: Build from scratch (tfidf)
+        run: python -m ingest build --docs docs --embeddings tfidf --out build/pr-tfidf
+
+      - name: Build main's index, for comparison
+        run: |
+          if [ -d _main/docs ]; then
+            python -m ingest build --docs _main/docs --embeddings tfidf --out build/main-tfidf
+            python -m ingest build --docs _main/docs --embeddings hash --out build/main-hash
+            python -m eval.evaluate --index build/main-tfidf --out build/main-eval.json || echo "main does not pass the gate with these questions (exit $?): comparison only"
+          else
+            echo "main has no docs/ yet: nothing to compare with"
+          fi
+
+      - name: Build incrementally on main's index (plan only; hash vectors stand in for Titan)
+        run: |
+          if [ -d build/main-hash ]; then
+            python -m ingest build --docs docs --embeddings hash --previous build/main-hash --out build/pr-hash
+          else
+            python -m ingest build --docs docs --embeddings hash --out build/pr-hash
+          fi
+
+      - name: Evaluate (the gate)
+        run: |
+          if [ -f build/main-eval.json ]; then
+            python -m eval.evaluate --index build/pr-tfidf --baseline build/main-eval.json
+          else
+            python -m eval.evaluate --index build/pr-tfidf
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          python -m ingest summary --plan build/pr-hash/build_plan.json --report build/pr-tfidf/eval_report.json \
+            --baseline build/main-eval.json --title "Knowledge base check" >> "$GITHUB_STEP_SUMMARY"

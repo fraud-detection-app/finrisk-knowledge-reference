@@ -1,0 +1,13 @@
+# Build output: an index is published to S3, never committed
+build/
+_main/
+*.npy
+*.joblib
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+.DS_Store
