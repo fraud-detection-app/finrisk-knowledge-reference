@@ -19,3 +19,6 @@ Q: How does a new policy document reach the assistant?
 A: Through a pull request to the finrisk-knowledge repository. After review and merge, the ingest
 pipeline builds a new index, checks it against the evaluation questions, and promotes it through
 dev, sit, pre-prod and prod.
+
+Q: Who signs off a high-value transfer?
+A: Two analysts. See the High-Value Transfer Review Policy.
